@@ -1,0 +1,43 @@
+esphome:
+  name: neko
+  friendly_name: neko
+
+esp8266:
+  board: esp01_1m
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "Js7D+o29n4P6UvQfUrRP2IBltR/B1oRI76K/2k0iULM="
+
+ota:
+  password: "fe297935b4c434c9329b9f0f55fa88d2"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Neko Fallback Hotspot"
+    password: "y4gawiSc4ydx"
+
+captive_portal:
+
+# Example configuration entry
+light:
+  - platform: binary
+    name: "Neko Lamp"
+    output: light_output
+
+output:
+  - id: light_output
+    platform: gpio
+    pin: GPIO2 
+
+         
+
+    

@@ -1,0 +1,272 @@
+esphome:
+  name: traincontroller
+  friendly_name: TrainController
+  on_boot:
+    priority: 600
+    then:
+      - output.set_level: { id: motor_in1_pwm, level: 0.0 }
+      - output.set_level: { id: motor_in2_pwm, level: 0.0 }
+      - globals.set: { id: target_speed, value: '0.0' }
+      - globals.set: { id: current_speed, value: '0.0' }
+      - globals.set: { id: motor_direction, value: '0' }
+      - globals.set: { id: saved_target_speed, value: '0.0' }
+      - globals.set: { id: ramp_step_delay_ms, value: '10' }
+      - globals.set: { id: target_direction, value: '0' }
+      - light.turn_on:
+          id: status_led
+          red: 0%
+          green: 0%
+          blue: 100%
+          transition_length: 0s
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_key_traincontroller
+  on_client_disconnected:
+    then:
+      - logger.log: "Home Assistant disconnected! Stopping motor."
+      - globals.set: { id: saved_target_speed, value: !lambda "return id(target_speed);" }
+      - globals.set: { id: target_speed, value: '0.0' }
+      - script.execute: ramp_motor_speed
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_user
+  password: !secret mqtt_password
+  discovery: true
+  discovery_retain: false
+  birth_message:
+    topic: traincontroller/status
+    payload: online
+  will_message:
+    topic: traincontroller/status
+    payload: offline
+  on_message:
+    - topic: traincontroller/set_direction
+      then:
+        - lambda: |-
+            if (x == "forward") {
+              id(set_direction_and_run).execute(0);
+            } else if (x == "reverse") {
+              id(set_direction_and_run).execute(1);
+            }
+
+ota:
+  - platform: esphome
+    password: !secret ota_password_traincontroller
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  on_disconnect:
+    then:
+      - logger.log: "WiFi disconnected! Stopping motor."
+      - globals.set: { id: saved_target_speed, value: !lambda "return id(target_speed);" }
+      - globals.set: { id: target_speed, value: '0.0' }
+      - script.execute: ramp_motor_speed
+  ap:
+    ssid: "Traincontroller Fallback Hotspot"
+    password: !secret ap_password
+
+captive_portal:
+
+output:
+  - platform: ledc
+    id: motor_in1_pwm
+    pin: 6
+    frequency: 25000Hz
+
+  - platform: ledc
+    id: motor_in2_pwm
+    pin: 7
+    frequency: 25000Hz
+
+globals:
+  - id: target_speed
+    type: float
+    initial_value: '0.0'
+  - id: current_speed
+    type: float
+    initial_value: '0.0'
+  - id: motor_direction
+    type: int
+    initial_value: '0'
+  - id: target_direction
+    type: int
+    initial_value: '0'
+  - id: saved_target_speed
+    type: float
+    initial_value: '0.0'
+  - id: ramp_step_delay_ms
+    type: int
+    initial_value: '20'
+
+button:
+  - platform: template
+    name: "Change Motor Direction"
+    id: motor_direction_button
+    on_press:
+      then:
+        - lambda: |-
+            id(target_direction) = id(motor_direction) == 0 ? 1 : 0;
+            id(set_direction_and_run).execute(id(target_direction));
+
+number:
+  - platform: template
+    name: "Motor Speed"
+    id: motor_speed_slider
+    min_value: 0.0
+    max_value: 1.0
+    step: 0.01
+    set_action:
+      then:
+        - globals.set: { id: target_speed, value: !lambda "return x;" }
+        - script.execute: ramp_motor_speed
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "Status Light"
+    pin: 35
+    num_leds: 1
+    rmt_channel: 0
+    chipset: WS2812
+    rgb_order: GRB
+    internal: true
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: 41
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Button"
+    id: atom_button
+    on_press:
+      - logger.log: "Physical button pressed"
+
+  - platform: gpio
+    pin:
+      number: 5
+      inverted: true
+    name: "DRV8876 Fault"
+    device_class: problem
+    id: drv_fault
+    on_press:
+      then:
+        - globals.set: { id: saved_target_speed, value: !lambda "return id(target_speed);" }
+        - globals.set: { id: target_speed, value: '0.0' }
+        - script.execute: ramp_motor_speed
+        - light.turn_on:
+            id: status_led
+            red: 100%
+            green: 0%
+            blue: 0%
+            transition_length: 0s
+        - logger.log: "FAULT DETECTED - motor stopped"
+    on_release:
+      then:
+        - globals.set: { id: target_speed, value: !lambda "return id(saved_target_speed);" }
+        - script.execute: ramp_motor_speed
+        - logger.log: "FAULT CLEARED - motor restoring speed"
+        - script.execute: update_led_idle_state
+
+script:
+  - id: ramp_motor_speed
+    mode: restart
+    then:
+      - logger.log: "Starting smooth ramp to new speed"
+      - lambda: |-
+          const float step = 0.01;
+          while (abs(id(current_speed) - id(target_speed)) > 0.01) {
+            if (id(current_speed) < id(target_speed)) {
+              id(current_speed) += step;
+            } else {
+              id(current_speed) -= step;
+            }
+            id(current_speed) = esphome::clamp(id(current_speed), 0.0f, 1.0f);
+
+            float norm = id(current_speed);
+            float eased = (1.0f - cosf(norm * 3.14159f)) * 0.5f;
+
+            if (id(motor_direction) == 0) {
+              id(motor_in1_pwm).set_level(eased);
+              id(motor_in2_pwm).set_level(0.0);
+            } else {
+              id(motor_in1_pwm).set_level(0.0);
+              id(motor_in2_pwm).set_level(eased);
+            }
+            delay(id(ramp_step_delay_ms));
+          }
+
+  - id: set_direction_and_run
+    parameters:
+      direction: int
+    then:
+      - logger.log: "Executing set_direction_and_run script"
+      - if:
+          condition:
+            lambda: 'return id(motor_direction) != direction;'
+          then:
+            - logger.log: "Changing direction"
+            - globals.set:
+                id: saved_target_speed
+                value: !lambda "return id(target_speed);"
+            - globals.set:
+                id: target_speed
+                value: '0.0'
+            - script.execute: ramp_motor_speed
+            - delay: 500ms
+            - globals.set:
+                id: motor_direction
+                value: !lambda "return direction;"
+      - globals.set:
+          id: target_speed
+          value: !lambda "return id(saved_target_speed) > 0.01 ? id(saved_target_speed) : 0.5;"
+      - script.execute: ramp_motor_speed
+
+  - id: update_led_idle_state
+    then:
+      - if:
+          condition:
+            lambda: "return id(drv_fault).state;"
+          then:
+            - light.turn_on:
+                id: status_led
+                red: 100%
+                green: 0%
+                blue: 0%
+                transition_length: 0s
+          else:
+            - if:
+                condition:
+                  lambda: "return id(current_speed) > 0.01;"
+                then:
+                  - light.turn_on:
+                      id: status_led
+                      red: 0%
+                      green: 100%
+                      blue: 0%
+                      transition_length: 0s
+                else:
+                  - light.turn_on:
+                      id: status_led
+                      red: 0%
+                      green: 0%
+                      blue: 100%
+                      transition_length: 0s
+
+interval:
+  - interval: 1s
+    then:
+      - mqtt.publish:
+          topic: traincontroller/heartbeat
+          payload: "1"
+          retain: false
