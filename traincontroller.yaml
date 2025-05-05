@@ -35,12 +35,20 @@ api:
       - globals.set: { id: saved_target_speed, value: !lambda "return id(target_speed);" }
       - globals.set: { id: target_speed, value: '0.0' }
       - script.execute: ramp_motor_speed
+  services:
+    - service: set_direction
+      variables:
+        direction: int
+      then:
+        - script.execute:
+            id: set_direction_and_run
+            direction: !lambda "return direction;"
 
 mqtt:
   broker: !secret mqtt_broker
   username: !secret mqtt_user
   password: !secret mqtt_password
-  discovery: true
+  discovery: false
   discovery_retain: false
   birth_message:
     topic: traincontroller/status
@@ -48,15 +56,6 @@ mqtt:
   will_message:
     topic: traincontroller/status
     payload: offline
-  on_message:
-    - topic: traincontroller/set_direction
-      then:
-        - lambda: |-
-            if (x == "forward") {
-              id(set_direction_and_run).execute(0);
-            } else if (x == "reverse") {
-              id(set_direction_and_run).execute(1);
-            }
 
 ota:
   - platform: esphome
@@ -108,15 +107,19 @@ globals:
     type: int
     initial_value: '20'
 
-button:
+switch:
   - platform: template
-    name: "Change Motor Direction"
-    id: motor_direction_button
-    on_press:
-      then:
-        - lambda: |-
-            id(target_direction) = id(motor_direction) == 0 ? 1 : 0;
-            id(set_direction_and_run).execute(id(target_direction));
+    name: "Motor Direction"
+    id: motor_direction_switch
+    icon: "mdi:swap-horizontal"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          id(set_direction_and_run).execute(0);  // Forward
+    turn_off_action:
+      - lambda: |-
+          id(set_direction_and_run).execute(1);  // Reverse
 
 number:
   - platform: template
@@ -179,6 +182,17 @@ binary_sensor:
         - script.execute: update_led_idle_state
 
 script:
+  - id: set_train_direction
+    parameters:
+      direction: int
+    then:
+      - lambda: |-
+          if (direction == 0) {
+            id(motor_direction_switch).turn_on();  // forward
+          } else {
+            id(motor_direction_switch).turn_off(); // reverse
+          }
+
   - id: ramp_motor_speed
     mode: restart
     then:
@@ -223,14 +237,24 @@ script:
                 id: target_speed
                 value: '0.0'
             - script.execute: ramp_motor_speed
-            - delay: 500ms
+            - wait_until:
+                condition:
+                  lambda: "return id(current_speed) < 0.01;"
+                timeout: 2s
+            - delay: 300ms  # pause after full stop
             - globals.set:
                 id: motor_direction
                 value: !lambda "return direction;"
-      - globals.set:
-          id: target_speed
-          value: !lambda "return id(saved_target_speed) > 0.01 ? id(saved_target_speed) : 0.5;"
-      - script.execute: ramp_motor_speed
+      - if:
+          condition:
+            lambda: "return id(saved_target_speed) > 0.01;"
+          then:
+            - globals.set:
+                id: target_speed
+                value: !lambda "return id(saved_target_speed);"
+            - script.execute: ramp_motor_speed
+          else:
+            - logger.log: "No saved speed, motor stays stopped"
 
   - id: update_led_idle_state
     then:

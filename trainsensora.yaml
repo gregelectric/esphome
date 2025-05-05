@@ -89,7 +89,7 @@ sensor:
   - platform: vl53l0x
     name: "Proximity"
     id: distance_sensor
-    update_interval: 500ms
+    update_interval: 1000ms
     on_value:
       then:
         - lambda: |-
