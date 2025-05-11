@@ -139,7 +139,12 @@ number:
     step: 0.01
     set_action:
       then:
-        - globals.set: { id: target_speed, value: !lambda "return x;" }
+        - globals.set: 
+            id: target_speed
+            value: !lambda "return x;"
+        - globals.set: 
+            id: saved_target_speed
+            value: !lambda "return x;"  # Always sync saved_target_speed with the slider!
         - script.execute: ramp_motor_speed
 
 light:
