@@ -212,12 +212,12 @@ script:
     then:
       - logger.log: "Starting smooth ramp to new speed"
       - lambda: |-
-          const float step = 0.01;
+          const float step = 0.01f;
 
           // Kickstart logic if starting from zero and target is low
           if (id(current_speed) == 0.0f && id(target_speed) < 0.4f && id(target_speed) > 0.0f) {
             if (id(motor_direction) == 0) {
-              id(motor_in1_pwm).set_level(0.5f);  // 50% power pulse
+              id(motor_in1_pwm).set_level(0.5f);
               id(motor_in2_pwm).set_level(0.0f);
             } else {
               id(motor_in1_pwm).set_level(0.0f);
@@ -226,34 +226,41 @@ script:
             delay(200);  // 200ms kick pulse
           }
 
-          while (abs(id(current_speed) - id(target_speed)) > 0.01f) {
+          // Smooth ramping loop
+          while (fabsf(id(current_speed) - id(target_speed)) > 0.005f) {
             if (id(current_speed) < id(target_speed)) {
               id(current_speed) += step;
             } else {
               id(current_speed) -= step;
             }
-            id(current_speed) = esphome::clamp(id(current_speed), 0.0f, 1.0f);
 
+            id(current_speed) = esphome::clamp(id(current_speed), 0.0f, 1.0f);
             float norm = id(current_speed);
 
-            // Apply easing curve + exponential mapping for better low-speed response
+            // Easing + exponential mapping for smoother low-speed response
             float eased = (1.0f - cosf(norm * 3.14159f)) * 0.5f;
-            eased = powf(eased, 0.3f);  // Exponential curve adjustment
+            eased = powf(eased, 0.3f);
 
-            if (id(motor_direction) == 0) {
+            if (id(target_speed) == 0.0f) {
+              id(motor_in1_pwm).set_level(0.0f);
+              id(motor_in2_pwm).set_level(0.0f);
+            } else if (id(motor_direction) == 0) {
               id(motor_in1_pwm).set_level(eased);
               id(motor_in2_pwm).set_level(0.0f);
             } else {
               id(motor_in1_pwm).set_level(0.0f);
               id(motor_in2_pwm).set_level(eased);
             }
+
             delay(id(ramp_step_delay_ms));
           }
-          // Ensure outputs are fully turned off at stop
-          if (id(target_speed) <= 0.0f) {
-              id(motor_in1_pwm).set_level(0.0f);
-              id(motor_in2_pwm).set_level(0.0f);
-          }          
+
+          // Force final value to match exactly after loop
+          id(current_speed) = id(target_speed);
+          if (id(target_speed) == 0.0f) {
+            id(motor_in1_pwm).set_level(0.0f);
+            id(motor_in2_pwm).set_level(0.0f);
+          }
 
   - id: set_direction_and_run
     parameters:
