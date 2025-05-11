@@ -43,6 +43,15 @@ api:
         - script.execute:
             id: set_direction_and_run
             direction: !lambda "return direction;"
+    - service: set_direction_and_speed
+      variables:
+        direction: int
+        speed: float
+      then:
+        - globals.set: { id: saved_target_speed, value: !lambda "return speed;" }
+        - script.execute:
+            id: set_direction_and_run
+            direction: !lambda "return direction;" 
 
 mqtt:
   broker: !secret mqtt_broker
